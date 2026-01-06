@@ -1,0 +1,95 @@
+import heapq
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+
+# --- ПАРАМЕТРИ НА ОСНОВІ ВАШИХ ДАНИХ (EDDF 2025) ---
+DAILY_ARRIVALS = 637   # Дані з вашого CSV
+SIM_TIME = 1440        # 1 доба (хв)
+INTER_ARRIVAL_TIME = SIM_TIME / DAILY_ARRIVALS
+NUM_GATES = 21         # Штучний дефіцит гейтів для стрес-тесту
+RANDOM_SEED = 42
+
+def simulate_airport(efficiency_gain):
+    """
+    Імітаційне моделювання аеропорту.
+    efficiency_gain: 0.10 (10%), 0.20 (20%), 0.25 (25%)
+    """
+    random.seed(RANDOM_SEED)
+    current_time = 0
+    arrivals = []
+    
+    # 1. Генеруємо час прильоту літаків
+    while current_time < SIM_TIME:
+        current_time += random.expovariate(1.0 / INTER_ARRIVAL_TIME)
+        if current_time < SIM_TIME:
+            arrivals.append(current_time)
+            
+    # 2. Гейти (черга за часом звільнення)
+    gates = [0.0] * NUM_GATES
+    heapq.heapify(gates)
+    
+    wait_times = []
+    efficiency_factor = 1.0 - efficiency_gain
+    
+    for arr in arrivals:
+        # Знаходимо гейт, що звільниться найшвидше
+        earliest_free_time = heapq.heappop(gates)
+        
+        # Розраховуємо очікування
+        wait_time = max(0, earliest_free_time - arr)
+        wait_times.append(wait_time)
+        
+        # Час обслуговування (turnaround) з урахуванням коефіцієнта
+        service_duration = random.uniform(30, 60) * efficiency_factor
+        
+        # Оновлюємо час звільнення гейта
+        free_at = max(arr, earliest_free_time) + service_duration
+        heapq.heappush(gates, free_at)
+        
+    return wait_times
+
+# --- ЗАПУСК МОДЕЛЮВАННЯ ДЛЯ ВСІХ СЦЕНАРІЇВ ---
+scenarios = {
+    'Baseline (0%)': 0.0,
+    'ITS Level 1 (10%)': 0.10,
+    'ITS Level 2 (20%)': 0.20,
+    'ITS Level 3 (25%)': 0.25
+}
+
+results = {name: simulate_airport(gain) for name, gain in scenarios.items()}
+averages = {name: np.mean(data) for name, data in results.items()}
+
+# --- ВІЗУАЛІЗАЦІЯ 1: СЕРЕДНІ ЗАТРИМКИ ---
+plt.figure(figsize=(10, 6))
+colors = ['#d3d3d3', '#87ceeb', '#4169e1', '#00008b']
+bars = plt.bar(averages.keys(), averages.values(), color=colors)
+
+plt.title('Аналіз чутливості: Середній час очікування vs Ефективність ІТС', fontsize=14)
+plt.ylabel('Середній час очікування гейта (хв)', fontsize=12)
+
+# Додаємо цифри над стовпчиками
+for bar in bars:
+    yval = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f"{yval:.2f} хв", 
+             ha='center', va='bottom', fontweight='bold')
+
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+# --- ВІЗУАЛІЗАЦІЯ 2: РОЗПОДІЛ (ГІСТОГРАМА) ---
+plt.figure(figsize=(12, 6))
+for name, data in results.items():
+    plt.hist(data, bins=30, alpha=0.5, label=name)
+
+plt.title('Розподіл часу очікування для різних рівнів цифровізації', fontsize=14)
+plt.xlabel('Час очікування (хв)')
+plt.ylabel('Кількість рейсів')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+# Вивід результатів у текст
+print("\nРЕЗУЛЬТАТИ МОДЕЛЮВАННЯ:")
+for name, avg in averages.items():
+    print(f"{name}: Середня затримка = {avg:.2f} хв")

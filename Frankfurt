@@ -1,95 +1,98 @@
-import heapq
-import random
 import numpy as np
+import heapq
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-# --- ПАРАМЕТРИ НА ОСНОВІ ВАШИХ ДАНИХ (EDDF 2025) ---
-DAILY_ARRIVALS = 637   # Дані з вашого CSV
-SIM_TIME = 1440        # 1 доба (хв)
-INTER_ARRIVAL_TIME = SIM_TIME / DAILY_ARRIVALS
-NUM_GATES = 21         # Штучний дефіцит гейтів для стрес-тесту
-RANDOM_SEED = 42
-
-def simulate_airport(efficiency_gain):
+def run_discrete_event_sim(num_arrivals, efficiency_coeff, num_gates=21, sim_time=1440, seed=42):
     """
-    Імітаційне моделювання аеропорту.
-    efficiency_gain: 0.10 (10%), 0.20 (20%), 0.25 (25%)
+    Simulates airport gate allocation using a Discrete Event Simulation (DES) approach.
+    num_arrivals: Average arrivals per 24h (from Eurocontrol)
+    efficiency_coeff: Reduction in turnaround time (ITS scenario)
     """
-    random.seed(RANDOM_SEED)
+    np.random.seed(seed)
+    inter_arrival = sim_time / num_arrivals
+    
+    # Priority queue for events: (time, event_type, flight_id)
+    # event_type: 0 for arrival, 1 for departure
+    events = []
+    
+    # Schedule initial arrival
+    heapq.heappush(events, (np.random.exponential(inter_arrival), 0, 0))
+    
     current_time = 0
-    arrivals = []
-    
-    # 1. Генеруємо час прильоту літаків
-    while current_time < SIM_TIME:
-        current_time += random.expovariate(1.0 / INTER_ARRIVAL_TIME)
-        if current_time < SIM_TIME:
-            arrivals.append(current_time)
-            
-    # 2. Гейти (черга за часом звільнення)
-    gates = [0.0] * NUM_GATES
-    heapq.heapify(gates)
-    
+    available_gates = num_gates
+    waiting_queue = [] # Queue for flights awaiting a free gate
     wait_times = []
-    efficiency_factor = 1.0 - efficiency_gain
     
-    for arr in arrivals:
-        # Знаходимо гейт, що звільниться найшвидше
-        earliest_free_time = heapq.heappop(gates)
+    flight_id_counter = 0
+    
+    while events and current_time < sim_time:
+        time, event_type, fid = heapq.heappop(events)
+        current_time = time
         
-        # Розраховуємо очікування
-        wait_time = max(0, earliest_free_time - arr)
-        wait_times.append(wait_time)
-        
-        # Час обслуговування (turnaround) з урахуванням коефіцієнта
-        service_duration = random.uniform(30, 60) * efficiency_factor
-        
-        # Оновлюємо час звільнення гейта
-        free_at = max(arr, earliest_free_time) + service_duration
-        heapq.heappush(gates, free_at)
-        
+        if event_type == 0: # Arrival Event
+            if available_gates > 0:
+                available_gates -= 1
+                wait_times.append(0)
+                # Determine turnaround duration (30-60 min) adjusted by ITS efficiency
+                service_duration = np.random.uniform(30, 60) * efficiency_coeff
+                heapq.heappush(events, (current_time + service_duration, 1, fid))
+            else:
+                # No gates available, enter queue
+                waiting_queue.append(current_time)
+            
+            # Schedule the next flight arrival
+            flight_id_counter += 1
+            next_arrival = current_time + np.random.exponential(inter_arrival)
+            if next_arrival < sim_time:
+                heapq.heappush(events, (next_arrival, 0, flight_id_counter))
+                
+        elif event_type == 1: # Departure Event
+            available_gates += 1
+            if waiting_queue:
+                # Immediate allocation of the freed gate to the next flight in queue
+                arrival_t = waiting_queue.pop(0)
+                wait_times.append(current_time - arrival_t)
+                available_gates -= 1
+                # Schedule its departure
+                service_duration = np.random.uniform(30, 60) * efficiency_coeff
+                heapq.heappush(events, (current_time + service_duration, 1, -1))
+
     return wait_times
 
-# --- ЗАПУСК МОДЕЛЮВАННЯ ДЛЯ ВСІХ СЦЕНАРІЇВ ---
-scenarios = {
-    'Baseline (0%)': 0.0,
-    'ITS Level 1 (10%)': 0.10,
-    'ITS Level 2 (20%)': 0.20,
-    'ITS Level 3 (25%)': 0.25
+# Data for Frankfurt (EDDF) based on Eurocontrol 2025
+DAILY_ARRIVALS = 637
+SCENARIOS = {
+    'Baseline (0%)': 1.0,
+    'ITS Level 1 (10%)': 0.9,
+    'ITS Level 2 (20%)': 0.8,
+    'ITS Level 3 (25%)': 0.75
 }
 
-results = {name: simulate_airport(gain) for name, gain in scenarios.items()}
-averages = {name: np.mean(data) for name, data in results.items()}
+# Plotting Configuration
+plt.figure(figsize=(12, 7))
+colors = ['#e74c3c', '#f39c12', '#3498db', '#2ecc71']
 
-# --- ВІЗУАЛІЗАЦІЯ 1: СЕРЕДНІ ЗАТРИМКИ ---
-plt.figure(figsize=(10, 6))
-colors = ['#d3d3d3', '#87ceeb', '#4169e1', '#00008b']
-bars = plt.bar(averages.keys(), averages.values(), color=colors)
+print("Processing Simulation for Frankfurt (EDDF)...")
 
-plt.title('Аналіз чутливості: Середній час очікування vs Ефективність ІТС', fontsize=14)
-plt.ylabel('Середній час очікування гейта (хв)', fontsize=12)
+for i, (name, coeff) in enumerate(SCENARIOS.items()):
+    wait_times = run_discrete_event_sim(DAILY_ARRIVALS, coeff)
+    # Generate Kernel Density Estimate plot for distributions
+    sns.kdeplot(wait_times, label=name, color=colors[i], fill=True, alpha=0.15, linewidth=2.5)
+    print(f"Results for {name}: Mean Wait = {np.mean(wait_times):.2f} min")
 
-# Додаємо цифри над стовпчиками
-for bar in bars:
-    yval = bar.get_height()
-    plt.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f"{yval:.2f} хв", 
-             ha='center', va='bottom', fontweight='bold')
+# Graphical enhancements for publication
+plt.title('Delay Distribution: Frankfurt (EDDF)\n(Stress Scenario, k=21 gates, Eurocontrol 2025 Data)', fontsize=15, pad=20)
+plt.xlabel('Queue Waiting Time (minutes)', fontsize=12)
+plt.ylabel('Probability Density', fontsize=12)
+plt.xlim(0, 35)
+plt.legend(title='ITS Implementation Level', fontsize=10)
+plt.grid(axis='both', linestyle='--', alpha=0.5)
 
-plt.grid(axis='y', linestyle='--', alpha=0.7)
+# Annotation of the "Congestion Tail"
+plt.annotate('Critical Congestion (Baseline)', xy=(22, 0.02), xytext=(26, 0.08),
+             arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5), fontsize=10)
+
+plt.tight_layout()
+plt.savefig('frankfurt_delay_distribution.png', dpi=300)
 plt.show()
-
-# --- ВІЗУАЛІЗАЦІЯ 2: РОЗПОДІЛ (ГІСТОГРАМА) ---
-plt.figure(figsize=(12, 6))
-for name, data in results.items():
-    plt.hist(data, bins=30, alpha=0.5, label=name)
-
-plt.title('Розподіл часу очікування для різних рівнів цифровізації', fontsize=14)
-plt.xlabel('Час очікування (хв)')
-plt.ylabel('Кількість рейсів')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
-# Вивід результатів у текст
-print("\nРЕЗУЛЬТАТИ МОДЕЛЮВАННЯ:")
-for name, avg in averages.items():
-    print(f"{name}: Середня затримка = {avg:.2f} хв")

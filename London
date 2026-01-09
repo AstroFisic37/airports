@@ -1,0 +1,96 @@
+import numpy as np
+import heapq
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def run_discrete_event_sim(num_arrivals, efficiency_coeff, num_gates=21, sim_time=1440, seed=42):
+    """
+    Simulates airport gate allocation using a Discrete Event Simulation (DES) approach.
+    num_arrivals: Average arrivals per 24h (from Eurocontrol data)
+    efficiency_coeff: Reduction in turnaround time based on ITS scenario
+    """
+    np.random.seed(seed)
+    inter_arrival = sim_time / num_arrivals
+    
+    events = [] # Priority queue for events: (time, event_type, flight_id)
+    # event_type: 0 for arrival, 1 for departure
+    
+    # Schedule the first flight arrival
+    heapq.heappush(events, (np.random.exponential(inter_arrival), 0, 0))
+    
+    current_time = 0
+    available_gates = num_gates
+    waiting_queue = [] # Flights waiting for an available gate
+    wait_times = []
+    
+    flight_id_counter = 0
+    
+    while events and current_time < sim_time:
+        time, event_type, fid = heapq.heappop(events)
+        current_time = time
+        
+        if event_type == 0: # Arrival Event
+            if available_gates > 0:
+                available_gates -= 1
+                wait_times.append(0)
+                # Determine turnaround duration (30-60 min) adjusted by ITS efficiency
+                service_duration = np.random.uniform(30, 60) * efficiency_coeff
+                heapq.heappush(events, (current_time + service_duration, 1, fid))
+            else:
+                # All gates occupied, aircraft enters the queue
+                waiting_queue.append(current_time)
+            
+            # Schedule the next flight arrival
+            flight_id_counter += 1
+            next_arrival = current_time + np.random.exponential(inter_arrival)
+            if next_arrival < sim_time:
+                heapq.heappush(events, (next_arrival, 0, flight_id_counter))
+                
+        elif event_type == 1: # Departure Event
+            available_gates += 1
+            if waiting_queue:
+                # A gate becomes available; the first aircraft in queue takes it
+                arrival_t = waiting_queue.pop(0)
+                wait_times.append(current_time - arrival_t)
+                available_gates -= 1
+                # Schedule its departure
+                service_duration = np.random.uniform(30, 60) * efficiency_coeff
+                heapq.heappush(events, (current_time + service_duration, 1, -1))
+
+    return wait_times
+
+# Data for London Heathrow (EGLL) based on Eurocontrol 2025
+DAILY_ARRIVALS_EGLL = 658
+SCENARIOS = {
+    'Baseline (0%)': 1.0,
+    'ITS Level 1 (10%)': 0.9,
+    'ITS Level 2 (20%)': 0.8,
+    'ITS Level 3 (25%)': 0.75
+}
+
+# Visualization settings
+plt.figure(figsize=(12, 7))
+colors = ['#e74c3c', '#f39c12', '#3498db', '#2ecc71']
+
+print("Generating Delay Distribution for London Heathrow (EGLL)...")
+
+for i, (name, coeff) in enumerate(SCENARIOS.items()):
+    wait_times = run_discrete_event_sim(DAILY_ARRIVALS_EGLL, coeff)
+    # Generate Kernel Density Estimate plot
+    sns.kdeplot(wait_times, label=name, color=colors[i], fill=True, alpha=0.15, linewidth=2.5)
+
+# Graphical enhancements
+plt.title('Delay Distribution: London Heathrow (EGLL)\n(Stress Scenario, k=21 gates, Eurocontrol 2025 Data)', fontsize=15, pad=20)
+plt.xlabel('Queue Waiting Time (minutes)', fontsize=12)
+plt.ylabel('Probability Density', fontsize=12)
+plt.xlim(0, 35)
+plt.legend(title='ITS Implementation Level', fontsize=10)
+plt.grid(axis='both', linestyle='--', alpha=0.5)
+
+# Highlighting the congestion area
+plt.annotate('Critical Congestion (Baseline)', xy=(22, 0.02), xytext=(26, 0.08),
+             arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5), fontsize=10)
+
+plt.tight_layout()
+plt.savefig('heathrow_delay_distribution.png', dpi=300)
+plt.show()
